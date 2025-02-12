@@ -1,0 +1,208 @@
+#include <Wire.h>
+#include <VL53L0X.h>
+
+// ------------------ Pin Definitions ------------------
+// We'll call the right motor "Motor A" and the left motor "Motor B"
+
+// Motor A (Right Motor)
+#define IN1 13
+#define IN2 12
+#define ENA 26  // PWM pin for Right Motor
+
+// Motor B (Left Motor)
+#define IN3 14
+#define IN4 27
+#define ENB 25  // PWM pin for Left Motor
+
+// Encoder pins
+// We associate "Encoder A" with Motor A (Right), "Encoder B" with Motor B (Left)
+#define ENCA_A 4
+#define ENCA_B 18
+#define ENCB_A 19
+#define ENCB_B 23
+
+// LiDAR sensor
+VL53L0X lidar;
+
+// These variables track encoder counts
+volatile long pulseCountA = 0; // Right Motor encoder
+volatile long pulseCountB = 0; // Left Motor encoder
+
+// ------------------ Tuning Constant ------------------
+// Calibrate this value so the robot pivots exactly 90°.
+#define TARGET_PULSES_90  200  
+
+// ------------------ Function Prototypes --------------
+void IRAM_ATTR encoderAInterrupt();
+void IRAM_ATTR encoderBInterrupt();
+void IRAM_ATTR encoderCInterrupt();
+void IRAM_ATTR encoderDInterrupt();
+
+void moveForward();
+void stopMotors();
+void turnRightPivot90();
+
+void setup() {
+  Serial.begin(115200);
+
+  // 1. Motor Pins
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+  pinMode(ENA, OUTPUT);
+  pinMode(ENB, OUTPUT);
+
+  // 2. Encoder Pins
+  pinMode(ENCA_A, INPUT);
+  pinMode(ENCA_B, INPUT);
+  pinMode(ENCB_A, INPUT);
+  pinMode(ENCB_B, INPUT);
+
+  // Attach encoder interrupts
+  attachInterrupt(digitalPinToInterrupt(ENCA_A), encoderAInterrupt, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENCA_B), encoderBInterrupt, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENCB_A), encoderCInterrupt, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENCB_B), encoderDInterrupt, CHANGE);
+
+  // 3. LiDAR Setup
+  Wire.begin();
+  lidar.init();
+  lidar.setTimeout(500);
+}
+
+void loop() {
+  // Read LiDAR distance in cm
+  int distance = lidar.readRangeSingleMillimeters() / 10;
+
+  // Print for debugging
+  Serial.print("LiDAR Distance: ");
+  Serial.print(distance);
+  Serial.println(" cm");
+
+  // If obstacle is within 8 cm, pivot right ~90°:
+  if (distance < 8) {
+    stopMotors();
+    delay(300); // short pause to let motors fully stop
+
+    turnRightPivot90();    // pivot 90 degrees to the right
+
+    // After turning, you can add a small pause if desired:
+    // delay(200);
+  } 
+
+  // Otherwise, move forward
+  else {
+    moveForward();
+  }
+}
+
+// ------------------ Motor Control ---------------------
+
+/**
+ * Move both wheels forward.
+ */
+void moveForward() {
+  // Right Motor (Forward)
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+
+  // Left Motor (Forward)
+  digitalWrite(IN3, HIGH);
+  digitalWrite(IN4, LOW);
+
+  // On ESP32, analogWrite typically replaced by ledcWrite().
+  // For a basic example, we'll just do:
+  analogWrite(ENA, 100);
+  analogWrite(ENB, 100);
+}
+
+/**
+ * Immediately stop both motors.
+ */
+void stopMotors() {
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, LOW);
+
+  analogWrite(ENA, 0);
+  analogWrite(ENB, 0);
+}
+
+/**
+ * Turn right ~90° by pivoting around the right wheel (RIGHT wheel stays still).
+ * - Right motor stopped
+ * - Left motor driven forward
+ * - Wait for left motor's encoder to reach `TARGET_PULSES_90`
+ */
+void turnRightPivot90() {
+  // 1. Reset encoder counts
+  pulseCountA = 0;
+  pulseCountB = 0;
+
+  // 2. Stop Right Motor
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+  analogWrite(ENA, 0);
+
+  // 3. Drive Left Motor Forward
+  digitalWrite(IN3, HIGH);
+  digitalWrite(IN4, LOW);
+  analogWrite(ENB, 100);
+
+  // 4. Wait until the left encoder hits the target pulses
+  while (abs(pulseCountB) < TARGET_PULSES_90) {
+    // Optionally add a short delay here
+    // delay(1);
+  }
+
+  // 5. Stop
+  stopMotors();
+}
+
+// ------------------ Encoder Interrupts ----------------
+/**
+ * Encoder A, Channel A: Right Motor
+ */
+void IRAM_ATTR encoderAInterrupt() {
+  // Check the other channel to determine direction
+  if (digitalRead(ENCA_B)) {
+    pulseCountA++;
+  } else {
+    pulseCountA--;
+  }
+}
+
+/**
+ * Encoder A, Channel B: Right Motor
+ */
+void IRAM_ATTR encoderBInterrupt() {
+  if (digitalRead(ENCA_A)) {
+    pulseCountA--;
+  } else {
+    pulseCountA++;
+  }
+}
+
+/**
+ * Encoder B, Channel A: Left Motor
+ */
+void IRAM_ATTR encoderCInterrupt() {
+  if (digitalRead(ENCB_B)) {
+    pulseCountB++;
+  } else {
+    pulseCountB--;
+  }
+}
+
+/**
+ * Encoder B, Channel B: Left Motor
+ */
+void IRAM_ATTR encoderDInterrupt() {
+  if (digitalRead(ENCB_A)) {
+    pulseCountB--;
+  } else {
+    pulseCountB++;
+  }
+}
